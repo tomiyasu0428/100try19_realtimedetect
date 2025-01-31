@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Object Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>リアルタイム物体検出</h1>
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+        <div class="controls">
+            <button id="startBtn" class="btn btn-start">スタート</button>
+            <button id="stopBtn" class="btn btn-stop" disabled>停止</button>
+        </div>
+        <div id="status" style="margin-top: 10px; color: #666;"></div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const socket = io('http://localhost:5001');
+
+        let isRunning = false;
+        let processInterval;
+
+        // ステータス表示
+        function updateStatus(message) {
+            status.textContent = message;
+        }
+
+        // カメラの設定
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480 }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        updateStatus('カメラの準備完了');
+                        resolve(video);
+                    };
+                });
+            } catch (error) {
+                updateStatus('カメラの初期化に失敗: ' + error.message);
+                throw error;
+            }
+        }
+
+        // フレーム処理
+        function processFrame() {
+            if (!isRunning) return;
+            try {
+                ctx.drawImage(video, 0, 0);
+                const imageData = canvas.toDataURL('image/jpeg', 0.7);
+                socket.emit('video_frame', imageData);
+            } catch (error) {
+                updateStatus('フレーム処理エラー: ' + error.message);
+                console.error('Frame processing error:', error);
+            }
+        }
+
+        // 検出結果の描画
+        socket.on('detection_update', (detections) => {
+            if (!isRunning) return;
+            try {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0);
+                
+                if (detections.length === 0) {
+                    updateStatus('物体が検出されていません');
+                } else {
+                    updateStatus(`${detections.length}個の物体を検出`);
+                }
+                
+                detections.forEach(detection => {
+                    const { bbox, label, score } = detection;
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+                    
+                    ctx.fillStyle = '#00ff00';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(`${label} (${(score * 100).toFixed(1)}%)`, bbox.x, bbox.y - 5);
+                });
+            } catch (error) {
+                updateStatus('描画エラー: ' + error.message);
+                console.error('Drawing error:', error);
+            }
+        });
+
+        // エラーハンドリング
+        socket.on('error', (data) => {
+            updateStatus('サーバーエラー: ' + data.message);
+            console.error('Server error:', data.message);
+        });
+
+        socket.on('connect_error', (error) => {
+            updateStatus('接続エラー: サーバーに接続できません');
+            console.error('Connection error:', error);
+        });
+
+        // 検出開始
+        startBtn.addEventListener('click', async () => {
+            try {
+                if (!video.srcObject) {
+                    await setupCamera();
+                }
+                isRunning = true;
+                processInterval = setInterval(processFrame, 100); // 10FPS
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                updateStatus('検出を開始しました');
+            } catch (error) {
+                updateStatus('開始エラー: ' + error.message);
+                console.error('Start error:', error);
+            }
+        });
+
+        // 検出停止
+        stopBtn.addEventListener('click', () => {
+            try {
+                isRunning = false;
+                clearInterval(processInterval);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0);
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                updateStatus('検出を停止しました');
+            } catch (error) {
+                updateStatus('停止エラー: ' + error.message);
+                console.error('Stop error:', error);
+            }
+        });
+
+        // 初期化
+        async function init() {
+            try {
+                await setupCamera();
+                ctx.drawImage(video, 0, 0);
+                updateStatus('準備完了');
+            } catch (error) {
+                updateStatus('初期化エラー: ' + error.message);
+                console.error('Init error:', error);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
